@@ -1,3 +1,5 @@
+# TOY PROJECT
+
 # Resonator
 
 A toy, local simulation: C++ evolves two conserved substances on a 100 x 100 x 100
