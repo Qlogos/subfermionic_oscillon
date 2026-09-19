@@ -32,7 +32,7 @@ class Viewer:
         self.ready = False
         self.plot = pv.Plotter(shape=(1, 2), col_weights=[0.73, 0.27],
                                window_size=(1400, 880), off_screen=off_screen,
-                               title="Resonator | valence flow", border=False)
+                               title="Resonator | real-field oscillon", border=False)
         self.plot.set_background("#101821", all_renderers=True)
         self.plot.subplot(0, 0)
         n = simulation.side
@@ -86,12 +86,12 @@ class Viewer:
         self.slider(lambda v: self.set_display(softness=v), (0.25, 3), softness, 0.735)
         self.cut_label = self.label("", 0.68)
         self.slider(self.set_cut, (1, n), n, 0.645)
-        self.label("FLOW", 0.585)
+        self.label("FIELD", 0.585)
         for key, label, bounds, height in [
-            ("attraction", "Opposite attraction", (0, 4), 0.545),
-            ("crowding", "Crowding pressure", (0, 0.5), 0.455),
-            ("memory", "Flow memory", (0, 2), 0.365),
-            ("rate", "Flow speed", (0, 2), 0.275),
+            ("focusing", "Self-attraction", (0, 3), 0.545),
+            ("saturation", "Core saturation", (0.01, 1), 0.455),
+            ("wave_speed", "Wave speed", (0, 1), 0.365),
+            ("damping", "Damping", (0, 0.05), 0.275),
         ]:
             actor = self.label("", height)
             def configure(value, key=key, label=label, actor=actor):
@@ -159,12 +159,12 @@ class Viewer:
         self.update_status()
 
     def update_status(self):
-        t, p, n, peak, rms, limited, steps, memory = self.sim.stats
+        t, p, n, peak, rms, energy, angular, steps = self.sim.stats
         state = "Running" if self.running else "Paused"
         self.status.SetInput(
             f"{state}    t = {t:.2f}    step {int(steps)}    {self.last_ms:.0f} ms / step\n"
             f"Positive {p:.6f}    Negative {n:.6f}    Total {p+n:.6f}\n"
-            f"Peak density {peak:.5f}    Limited donors {limited:.2%}    Arena {memory:.1f} MiB"
+            f"Peak density {peak:.5f}    Energy {energy:.4f}    Internal L {angular:.4f}"
             + (f"\n{self.message}" if self.message else ""))
 
     def advance(self):
@@ -217,12 +217,13 @@ def main():
     parser.add_argument("--size", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mass", type=float, default=1000)
-    parser.add_argument("--opaque-at", type=float, default=1.0)
+    parser.add_argument("--opaque-at", type=float, default=0.05)
     parser.add_argument("--fuzziness", type=float, default=1.0)
-    parser.add_argument("--attraction", type=float, default=2.0)
-    parser.add_argument("--crowding", type=float, default=0.08)
-    parser.add_argument("--memory", type=float, default=0.4)
-    parser.add_argument("--rate", type=float, default=1.0)
+    parser.add_argument("--field-mass", type=float, default=1.0)
+    parser.add_argument("--focusing", type=float, default=1.0)
+    parser.add_argument("--saturation", type=float, default=0.1)
+    parser.add_argument("--wave-speed", type=float, default=0.5)
+    parser.add_argument("--damping", type=float, default=0.0)
     parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument("--steps", type=int, default=0, help="Advance before opening the viewer")
     parser.add_argument("--save", type=Path, help="Render one image without opening the viewer")
@@ -233,8 +234,9 @@ def main():
         parser.error("Use steps in [0,100000].")
     try:
         with Simulation(args.size, args.seed, args.mass) as simulation:
-            simulation.configure(attraction=args.attraction, crowding=args.crowding,
-                                 memory=args.memory, rate=args.rate, dt=args.dt)
+            simulation.configure(field_mass=args.field_mass, focusing=args.focusing,
+                                 saturation=args.saturation, wave_speed=args.wave_speed,
+                                 damping=args.damping, dt=args.dt)
             simulation.step(args.steps)
             viewer = Viewer(simulation, args.opaque_at, args.fuzziness, bool(args.save))
             if args.save:

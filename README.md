@@ -1,138 +1,103 @@
-# TOY PROJECT
-
-## That is to say, I'm just messing around with some late-night ideas I get with a lot of caffeine, and _agentic assistance_
-
 # Resonator
 
-A toy, local simulation: C++ evolves two conserved substances on a 100 x 100 x 100
-grid; Python displays their density in an interactive 3D volume. No server.
+This toy project now uses a cheap classical real-field oscillon model. C++ evolves
+two real amplitudes on a cubic grid; Python displays their squared densities in an
+interactive 3D volume. There are no complex numbers, quantum-mechanical operators,
+or nonlocal interactions.
 
 ## Run
-
-The backend is built and the local Python environment is installed on this machine.
-From this folder:
 
 ```powershell
 .\.venv\Scripts\python.exe visuals.py
 ```
 
-Or `./run.ps1`. The viewer starts running. Space pauses, N advances one step,
-R resets to the same seed (keeping current parameters), S saves `preview.png`.
-Drag the volume to orbit; scroll to zoom. Close the window to exit.
+The viewer starts running. Space pauses/resumes, N advances one step, R resets to
+the same seed, and S saves `preview.png`. Drag to orbit and scroll to zoom.
 
-Orange means positive-dominated, blue means negative-dominated, pale means mixed.
-Density is positive + negative; the two never cancel. Empty cells are invisible.
-The box outline shows the domain. Voxels are nearest-sampled cubes, without a
-million individual mesh objects or empty-cell wireframes.
+Orange is the squared first field, blue is the squared second field, and pale is
+where both overlap. Empty cells are transparent. The default opacity threshold is
+0.05 because the initial total density is normalized to 1000 over a localized
+packet rather than spread uniformly through the million cells.
 
 Display controls:
 
-- **Opaque at**: total density at which a cell is fully opaque. Default 1.
-  The slider is logarithmic, from 0.0001 to 10.
-- **Fuzziness**: default 1; larger values reveal faint material. Opacity is
-  `min(density / opaque_at, 1) ** (1 / fuzziness)`. Zero is always transparent.
-- **Visible depth**: cut away upper Z layers to see inside. Does not alter physics.
+- **Opaque at** controls the density at which a cell reaches full opacity.
+- **Fuzziness** reveals lower-density material with a smooth power curve.
+- **Visible depth** cuts away upper layers for inspecting the interior.
 
-Opacity describes transmission through one cell width; translucent cells accumulate
-along a viewing ray. A full box can obscure its interior even when individual cells
-are translucent. Use the depth control. Floating-point render data avoids rounding
-the initial dilute densities down to transparent 8-bit alpha values.
+## Local real-field model
 
-The mean density is only 0.001 with a total mass of 1000. To reveal more of it:
-
-```powershell
-.\.venv\Scripts\python.exe visuals.py --opaque-at 0.1 --fuzziness 1.2
-```
-
-The other sliders change attraction, crowding, memory time and flow speed live.
-The displayed limiter fraction should stay small for an accurate trajectory.
-If it stays high, reduce flow speed or restart with a smaller `--dt`.
-
-## Model
-
-Each cube starts with one random sign and a random magnitude. Each population is
-normalized to mass 500, with roughly half the cells assigned each sign. Seed 42 is
-the default. Later a cube can contain both. Closed walls have no outgoing faces.
-
-Internal values are normalized by `mass / number_of_cells`, so average total
-density is 1 and parameters are independent of that scale. For normalized fields
-`x`, `y`, `r=x+y`, use pressures:
+Each cube stores `u`, `v` and their velocities `du`, `dv`. It reads only itself and
+its six face-neighbors. With `rho = u*u + v*v`, the local potential is
 
 ```text
-mu_positive = x - a*y + b*r*r
-mu_negative = y - a*x + b*r*r
-
-delta = mu[i] - mu[j]
-target_flux = k * delta * (value[i] if delta >= 0 else value[j])
-flux = target_flux + (previous_flux - target_flux) * exp(-dt/tau)
+V(rho) = 0.5*m*m*rho - 0.25*focusing*rho*rho
+         + (saturation/6)*rho*rho*rho
 ```
 
-With tau=0, use the target directly. Each shared face has one signed current per
-substance. Positive current goes from the lower array index to the higher one.
-All targets use the old state. All transfers update the next state symmetrically.
-No annihilation, sources, sinks or added noise. Memory can carry flow temporarily
-against the instantaneous pressure gradient.
+The negative quartic term focuses finite-amplitude regions; the positive sextic
+term prevents unlimited collapse. The discrete equations are
 
-If a cube's six outgoing transfers exceed its available material, scale all of
-them by one donor factor before applying either side of any transfer. The limited
-current becomes next step's memory, so empty donors cannot build up hidden current.
-A tiny rounding margin prevents negative leftovers. There is no post-update clamp
-or global renormalization that would conceal lost mass.
+```text
+u'' = wave_speed^2 * laplacian(u)
+     - (m^2 - focusing*rho + saturation*rho^2) * u - damping*u'
 
-Defaults: a=2, b=0.08, k=1, tau=0.4, dt=0.01. Time and coefficients are abstract
-simulation units. This is an explicit first-order numerical experiment: positivity
-and conservation do not establish time-step convergence. Compare runs at half dt
-and the same simulation time before interpreting an oscillation as physical.
+v'' = wave_speed^2 * laplacian(v)
+     - (m^2 - focusing*rho + saturation*rho^2) * v - damping*v'
+```
 
-Attraction can produce dense mixed regions; flow memory allows overshoot.
-This model does not guarantee a self-sustaining resonator or smooth macroscopic
-globs. There is no external energy drive or explicit interface penalty. Persistent
-motion, if observed, needs further numerical checks, and small grid-scale spots are
-possible. The two-pressure construction is a toy constitutive rule.
+The Laplacian is the six-neighbor sum of `(neighbor - center)`. Reflective closed
+walls are used: missing boundary neighbors contribute zero flux. Velocity-Verlet
+updates the fields in two half-velocity steps. With zero damping this is an
+energy-conserving classical lattice experiment up to time-step error.
 
-## Files and memory
+The initial condition is a localized Gaussian packet. The second field receives a
+quadrature velocity, so the pair rotates through its two-dimensional real field
+space. The displayed internal angular momentum is the local sum of
+`u*dv - v*du`. This is a classical internal-rotation diagnostic, not a derivation
+of electron spin.
 
-- `simulation.hpp`: local pressures, persistent face currents, donor limiter.
-- `arena.hpp`: fixed-capacity 64-byte-aligned allocation.
-- `backend.cpp` / `backend.py`: small C interface / ctypes bridge.
-- `visuals.py`: Python/PyVista/VTK GPU volume and controls.
-- `main.cpp`: optional command-line simulation with CSV diagnostics.
-- `tests.cpp`: conservation, positivity, memory and equilibrium checks.
+Localized, oscillating real scalar-field configurations are commonly called
+oscillons. Their existence and lifetime depend strongly on the potential and
+dimension; this project is an exploratory lattice model, not a physical electron
+model. See [Oscillons in Scalar Field Theories](https://arxiv.org/abs/hep-th/0602187).
 
-The C++ arena holds 14 contiguous double arrays: two densities, two pressures,
-six face-current arrays, two donor factors and two next-state arrays. At 100 cubed,
-that is about 106.8 MiB plus alignment. There are no allocations inside a simulation
-step. X is the contiguous axis. Visualization adds CPU/GPU buffers. A shared library
-passes fresh arrays directly to Python, replacing the original binary-file demo.
-The old `results.bin` is no longer used.
+## Controls and parameters
 
-## Rebuild / install on another machine
+- `field_mass` sets the linear oscillation scale.
+- `focusing` strengthens attractive self-interaction.
+- `saturation` sets high-density repulsion.
+- `wave_speed` sets neighbor-to-neighbor propagation.
+- `damping` removes energy gradually; leave it at zero when testing persistence.
+- `dt` is checked against a 3D wave CFL limit.
 
-Requires Python, CMake and a C++17 compiler; GPU volume rendering requires a working
-OpenGL driver. Python 3.14 and the local MinGW compiler were used here.
+The viewer exposes the four nonlinear/dynamical controls; field mass and `dt` are
+available from the command line:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe visuals.py --field-mass 1 --dt 0.02
+.\.venv\Scripts\python.exe visuals.py --focusing 1.4 --saturation 0.1 --wave-speed 0.5
+```
+
+Use smaller `dt` and compare the same simulated time before treating a pattern as
+physical. If damping is zero, energy should remain nearly constant. A packet may
+radiate or decay; a persistent resonator is a behavior to measure, not a guarantee.
+
+## Memory and rebuild
+
+The arena holds six contiguous double arrays: `u`, `v`, their velocities, and two
+acceleration buffers. At 100 cubed this is about 45.8 MiB plus alignment, with no
+per-face current storage and no allocations in a simulation step. The Python bridge
+receives squared-density views for the renderer.
+
+```powershell
 cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
+.\.venv\Scripts\python.exe test_viewer.py
+.\.venv\Scripts\python.exe test_playback.py
 ```
 
-With Visual Studio use a fresh build folder, omit the generator argument, and use
-`cmake --build build --config Release` and `ctest --test-dir build -C Release`.
-Close the viewer before rebuilding its DLL.
-
-```powershell
-# 200 steps on the full grid, print CSV diagnostics
-.\build\resonator.exe 200 100
-# Compare memoryless behavior
-.\build\resonator.exe 200 100 0
-# Offscreen preview after 100 steps
-.\.venv\Scripts\python.exe visuals.py --steps 100 --save preview.png
-# Small, faster box for experimenting (same total mass)
-.\.venv\Scripts\python.exe visuals.py --size 40
-```
-
-Implementation references: [VTK volume properties](https://vtk.org/doc/nightly/html/classvtkVolumeProperty.html),
-[PyVista timers](https://docs.pyvista.org/api/plotting/_autosummary/pyvista.plotter.add_timer_event).
+The CPU update is O(number of cells) with a fixed amount of work per cell. The
+default 100 cubed run is intended for the compiled backend; use `--size 40` while
+exploring parameter ranges.

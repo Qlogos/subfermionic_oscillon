@@ -1,175 +1,195 @@
 #pragma once
+
 #include "arena.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <random>
-#include <sstream>
 #include <stdexcept>
 
+// Two real amplitudes on a local cubic lattice. The shared radial potential
+// binds them into one classical localized excitation; no complex numbers are
+// required. The frontend receives u^2 and v^2 as the two visible densities.
 struct Parameters {
-    double attraction = 2.0;
-    double crowding = 0.08;
-    double rate = 1.0;
-    double memory = 0.4;
-    double dt = 0.01;
+    double field_mass = 1.0;
+    double focusing = 1.0;
+    double saturation = 0.1;
+    double wave_speed = 0.5;
+    double damping = 0.0;
+    double dt = 0.02;
 };
 
 class Simulation {
 public:
     const int side;
     const std::size_t count;
-    const double mass_scale;
+    const double target_mass;
+    double mass_scale = 0.0;
     Arena arena;
     Parameters params;
-    double *positive, *negative;
+    double *u, *v, *du, *dv;
     double time = 0.0;
     std::uint64_t steps = 0;
-    std::size_t limited = 0;
 
     Simulation(int n, std::uint32_t seed, double mass, Parameters options = {})
         : side(validate_side(n)), count(std::size_t(side) * side * side),
-          mass_scale(validate_mass(mass) / double(count)),
-          arena(14 * count * sizeof(double) + 14 * Arena::alignment), params(options) {
+          target_mass(validate_mass(mass)),
+          arena(6 * count * sizeof(double) + 6 * Arena::alignment), params(options) {
         validate(params);
-        positive = array(); negative = array();
-        mu_p = array(); mu_n = array();
-        for (int d = 0; d < 3; ++d) { flux_p[d] = array(); flux_n[d] = array(); }
-        out_p = array(); out_n = array(); next_p = array(); next_n = array();
+        u = array(); v = array(); du = array(); dv = array();
+        acc_u = array(); acc_v = array();
         reset(seed);
     }
 
     static void validate(const Parameters& p) {
-        if (!std::isfinite(p.attraction) || p.attraction < 0 || p.attraction > 10 ||
-            !std::isfinite(p.crowding) || p.crowding < 0 || p.crowding > 10 ||
-            !std::isfinite(p.rate) || p.rate < 0 || p.rate > 10 ||
-            !std::isfinite(p.memory) || p.memory < 0 || p.memory > 10 ||
+        if (!std::isfinite(p.field_mass) || p.field_mass <= 0 || p.field_mass > 10 ||
+            !std::isfinite(p.focusing) || p.focusing < 0 || p.focusing > 10 ||
+            !std::isfinite(p.saturation) || p.saturation <= 0 || p.saturation > 10 ||
+            !std::isfinite(p.wave_speed) || p.wave_speed < 0 || p.wave_speed > 2 ||
+            !std::isfinite(p.damping) || p.damping < 0 || p.damping > 1 ||
             !std::isfinite(p.dt) || p.dt <= 0 || p.dt > 0.1)
-            throw std::invalid_argument("Invalid parameters: a, b, k, tau in [0,10], dt in (0,0.1]");
+            throw std::invalid_argument("Invalid field parameters");
+        if (p.wave_speed > 0 && p.dt * p.wave_speed * std::sqrt(3.0) > 0.9)
+            throw std::invalid_argument("dt is too large for the 3D wave-speed CFL limit");
     }
 
     void reset(std::uint32_t seed) {
         std::mt19937 random(seed);
-        double total_p = 0, total_n = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            const double weight = 0.5 + double(random()) / double(random.max());
-            // Guarantee at least one of each even for the smallest test box.
-            const bool is_positive = i == 0 || (i != 1 && (random() & 1));
-            positive[i] = is_positive ? weight : 0;
-            negative[i] = is_positive ? 0 : weight;
-            total_p += positive[i]; total_n += negative[i];
-        }
-        for (std::size_t i = 0; i < count; ++i) {
-            positive[i] *= double(count) / (2 * total_p);
-            negative[i] *= double(count) / (2 * total_n);
-        }
-        for (int d = 0; d < 3; ++d) {
-            std::fill_n(flux_p[d], count, 0.0);
-            std::fill_n(flux_n[d], count, 0.0);
-        }
-        time = 0; steps = 0; limited = 0;
+        std::uniform_real_distribution<double> noise(-1.0, 1.0);
+        const double center = 0.5 * double(side - 1);
+        const double sigma = std::max(2.5, 0.08 * double(side));
+        constexpr double amplitude = 1.15;
+        constexpr double internal_spin = 0.78;
+        double raw_density = 0.0;
+        const std::size_t n = std::size_t(side);
+        for (std::size_t z = 0; z < n; ++z)
+            for (std::size_t y = 0; y < n; ++y)
+                for (std::size_t x = 0, i = (z * n + y) * n; x < n; ++x, ++i) {
+                    const double dx = double(x) - center;
+                    const double dy = double(y) - center;
+                    const double dz = double(z) - center;
+                    const double envelope = std::exp(-(dx * dx + dy * dy + dz * dz) /
+                                                      (2.0 * sigma * sigma));
+                    const double jitter = 1.0 + 0.015 * noise(random);
+                    u[i] = amplitude * envelope * jitter;
+                    v[i] = 0.01 * amplitude * envelope * noise(random);
+                    du[i] = 0.0;
+                    // Quadrature velocity gives internal rotation using only real values.
+                    dv[i] = internal_spin * amplitude * envelope * jitter;
+                    raw_density += u[i] * u[i] + v[i] * v[i];
+                }
+        if (mass_scale == 0.0) mass_scale = target_mass / raw_density;
+        std::fill_n(acc_u, count, 0.0);
+        std::fill_n(acc_v, count, 0.0);
+        time = 0.0;
+        steps = 0;
     }
 
     void step() {
         validate(params);
-        const auto& p = params;
-        // Exact exponential relaxation for a target held fixed during one step.
-        const double blend = p.memory == 0 ? 1.0 : -std::expm1(-p.dt / p.memory);
+        acceleration();
+        const double half_dt = 0.5 * params.dt;
         for (std::size_t i = 0; i < count; ++i) {
-            const double r = positive[i] + negative[i];
-            const double pressure = p.crowding * r * r;
-            mu_p[i] = positive[i] - p.attraction * negative[i] + pressure;
-            mu_n[i] = negative[i] - p.attraction * positive[i] + pressure;
-            out_p[i] = out_n[i] = 0;
+            du[i] += half_dt * acc_u[i];
+            dv[i] += half_dt * acc_v[i];
+            u[i] += params.dt * du[i];
+            v[i] += params.dt * dv[i];
         }
-        // Exactly one stored current per internal face and substance. Walls have none.
-        faces([&](std::size_t i, std::size_t j, int d) {
-            relax(i, j, positive, mu_p, flux_p[d][i], out_p, blend);
-            relax(i, j, negative, mu_n, flux_n[d][i], out_n, blend);
-        });
-        limited = 0;
+        acceleration();
         for (std::size_t i = 0; i < count; ++i) {
-            // Retain a rounding margin when the donor would otherwise be exhausted.
-            // Limit all outgoing faces together, never independently per face.
-            // Also retain a normal-range residue: repeated emptying must not let
-            // subnormal rounding turn a tiny positive donor into a negative one.
-            const double floor = 16 * std::numeric_limits<double>::min();
-            const double available_p = std::max(0.0, positive[i] - std::max(positive[i] * 1e-12, floor));
-            const double available_n = std::max(0.0, negative[i] - std::max(negative[i] * 1e-12, floor));
-            if (out_p[i] > available_p) ++limited;
-            if (out_n[i] > available_n) ++limited;
-            out_p[i] = out_p[i] > available_p ? available_p / out_p[i] : 1;
-            out_n[i] = out_n[i] > available_n ? available_n / out_n[i] : 1;
-            next_p[i] = positive[i]; next_n[i] = negative[i];
+            du[i] += half_dt * acc_u[i];
+            dv[i] += half_dt * acc_v[i];
         }
-        faces([&](std::size_t i, std::size_t j, int d) {
-            transfer(i, j, flux_p[d][i], out_p, next_p);
-            transfer(i, j, flux_n[d][i], out_n, next_n);
-        });
-        for (std::size_t i = 0; i < count; ++i) {
-            if (!std::isfinite(next_p[i]) || !std::isfinite(next_n[i]) ||
-                next_p[i] < 0 || next_n[i] < 0) {
-                std::ostringstream message;
-                message << "Invalid state at step " << steps << ", cell " << i
-                        << ": p=" << next_p[i] << ", n=" << next_n[i]
-                        << "; reset and reduce dt/rate/attraction";
-                throw std::runtime_error(message.str());
-            }
-        }
-        std::swap(positive, next_p); std::swap(negative, next_n);
-        time += p.dt; ++steps;
+        time += params.dt;
+        ++steps;
     }
 
-    // Physical units: time, positive mass, negative mass, peak density,
-    // RMS change from mean density, limited donor fraction, steps, arena MiB.
+    // time, positive density, negative density, peak density, density RMS,
+    // field energy, internal angular momentum, steps.
     void statistics(double* result) const {
-        double sp = 0, sn = 0, peak = 0, variance = 0;
+        double positive = 0.0, negative = 0.0, peak = 0.0, square_error = 0.0;
+        double energy = 0.0, angular = 0.0;
+        const double mean = target_mass / double(count);
         for (std::size_t i = 0; i < count; ++i) {
-            sp += positive[i]; sn += negative[i];
-            const double r = positive[i] + negative[i];
-            peak = std::max(peak, r);
-            variance += (r - 1) * (r - 1);
+            const double uu = u[i] * u[i];
+            const double vv = v[i] * v[i];
+            const double density = mass_scale * (uu + vv);
+            positive += mass_scale * uu;
+            negative += mass_scale * vv;
+            peak = std::max(peak, density);
+            square_error += (density - mean) * (density - mean);
+            energy += 0.5 * (du[i] * du[i] + dv[i] * dv[i]);
+            energy += 0.5 * params.field_mass * params.field_mass * (uu + vv);
+            const double rho = uu + vv;
+            energy -= 0.25 * params.focusing * rho * rho;
+            energy += (params.saturation / 6.0) * rho * rho * rho;
+            angular += u[i] * dv[i] - v[i] * du[i];
         }
-        result[0] = time; result[1] = sp * mass_scale; result[2] = sn * mass_scale;
-        result[3] = peak * mass_scale;
-        result[4] = std::sqrt(variance / double(count)) * mass_scale;
-        result[5] = double(limited) / (2 * double(count));
-        result[6] = double(steps); result[7] = double(arena.used_bytes()) / (1024 * 1024);
+        const double c2 = params.wave_speed * params.wave_speed;
+        for_each_face([&](std::size_t i, std::size_t j) {
+            const double du_face = u[j] - u[i];
+            const double dv_face = v[j] - v[i];
+            energy += 0.5 * c2 * (du_face * du_face + dv_face * dv_face);
+        });
+        result[0] = time;
+        result[1] = positive;
+        result[2] = negative;
+        result[3] = peak;
+        result[4] = std::sqrt(square_error / double(count));
+        result[5] = energy;
+        result[6] = angular;
+        result[7] = double(steps);
     }
 
 private:
-    double *mu_p, *mu_n, *flux_p[3], *flux_n[3], *out_p, *out_n, *next_p, *next_n;
+    double *acc_u, *acc_v;
+
     double* array() { return arena.allocate<double>(count); }
     static int validate_side(int n) {
         if (n < 2 || n > 160) throw std::invalid_argument("Box side must be in [2,160]");
         return n;
     }
     static double validate_mass(double mass) {
-        if (!std::isfinite(mass) || mass <= 0) throw std::invalid_argument("Mass must be positive and finite");
+        if (!std::isfinite(mass) || mass <= 0) throw std::invalid_argument("Total mass must be positive");
         return mass;
     }
-    template<class F> void faces(F&& f) {
-        const auto n = std::size_t(side);
+
+    template <class F>
+    void for_each_face(F&& function) const {
+        const std::size_t n = std::size_t(side);
         for (std::size_t z = 0; z < n; ++z)
             for (std::size_t y = 0; y < n; ++y)
                 for (std::size_t x = 0, i = (z * n + y) * n; x < n; ++x, ++i) {
-                    if (x + 1 < n) f(i, i + 1, 0);
-                    if (y + 1 < n) f(i, i + n, 1);
-                    if (z + 1 < n) f(i, i + n * n, 2);
+                    if (x + 1 < n) function(i, i + 1);
+                    if (y + 1 < n) function(i, i + n);
+                    if (z + 1 < n) function(i, i + n * n);
                 }
     }
-    void relax(std::size_t i, std::size_t j, const double* value,
-               const double* mu, double& flux, double* outgoing, double blend) {
-        const double difference = mu[i] - mu[j];
-        const double target = params.rate * difference * (difference >= 0 ? value[i] : value[j]);
-        flux += blend * (target - flux);
-        if (!std::isfinite(flux)) throw std::runtime_error("Flow overflow; reset with smaller parameters");
-        outgoing[flux >= 0 ? i : j] += params.dt * std::abs(flux);
-    }
-    void transfer(std::size_t i, std::size_t j, double& flux,
-                  const double* scale, double* next) {
-        flux *= scale[flux >= 0 ? i : j];
-        const double amount = params.dt * flux;
-        next[i] -= amount; next[j] += amount;
+
+    void acceleration() {
+        const std::size_t n = std::size_t(side);
+        const double c2 = params.wave_speed * params.wave_speed;
+        const double m2 = params.field_mass * params.field_mass;
+        for (std::size_t z = 0; z < n; ++z)
+            for (std::size_t y = 0; y < n; ++y)
+                for (std::size_t x = 0, i = (z * n + y) * n; x < n; ++x, ++i) {
+                    double lap_u = 0.0, lap_v = 0.0;
+                    auto neighbor = [&](std::size_t j) {
+                        lap_u += u[j] - u[i];
+                        lap_v += v[j] - v[i];
+                    };
+                    if (x > 0) neighbor(i - 1);
+                    if (x + 1 < n) neighbor(i + 1);
+                    if (y > 0) neighbor(i - n);
+                    if (y + 1 < n) neighbor(i + n);
+                    if (z > 0) neighbor(i - n * n);
+                    if (z + 1 < n) neighbor(i + n * n);
+                    const double rho = u[i] * u[i] + v[i] * v[i];
+                    const double local = m2 - params.focusing * rho +
+                                         params.saturation * rho * rho;
+                    acc_u[i] = c2 * lap_u - local * u[i] - params.damping * du[i];
+                    acc_v[i] = c2 * lap_v - local * v[i] - params.damping * dv[i];
+                }
     }
 };

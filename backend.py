@@ -1,7 +1,8 @@
-"""Small ctypes bridge. The arena and all simulation updates live in C++."""
+"""Small ctypes bridge. The arena and all field updates live in C++."""
 import ctypes as ct
 from pathlib import Path
 import sys
+
 import numpy as np
 
 
@@ -19,7 +20,7 @@ class Simulation:
             "rs_error": ([], ct.c_char_p),
             "rs_create": ([ct.c_int, ct.c_uint, ct.c_double], ct.c_void_p),
             "rs_destroy": ([ct.c_void_p], None),
-            "rs_configure": ([ct.c_void_p] + [ct.c_double] * 5, ct.c_int),
+            "rs_configure": ([ct.c_void_p] + [ct.c_double] * 6, ct.c_int),
             "rs_step": ([ct.c_void_p, ct.c_int], ct.c_int),
             "rs_reset": ([ct.c_void_p, ct.c_uint], None),
             "rs_read": ([ct.c_void_p, pointer, pointer], None),
@@ -35,7 +36,8 @@ class Simulation:
         self.positive = np.empty(side**3, dtype=np.float64)
         self.negative = np.empty_like(self.positive)
         self.stats = np.empty(8, dtype=np.float64)
-        self.parameters = dict(attraction=2.0, crowding=0.08, rate=1.0, memory=0.4, dt=0.01)
+        self.parameters = dict(field_mass=1.0, focusing=1.0, saturation=0.1,
+                               wave_speed=0.5, damping=0.0, dt=0.02)
         self.read()
 
     def check(self, status):
@@ -44,7 +46,8 @@ class Simulation:
 
     def configure(self, **changes):
         parameters = self.parameters | changes
-        self.check(self.lib.rs_configure(self.handle, *(parameters[k] for k in ("attraction", "crowding", "rate", "memory", "dt"))))
+        keys = ("field_mass", "focusing", "saturation", "wave_speed", "damping", "dt")
+        self.check(self.lib.rs_configure(self.handle, *(parameters[k] for k in keys)))
         self.parameters = parameters
 
     def step(self, count=1):

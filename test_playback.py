@@ -24,9 +24,9 @@ def key(viewer, name, character):
 
 
 def wait_for_steps(viewer, count):
-    initial = viewer.sim.stats[6]
+    initial = viewer.sim.stats[7]
     deadline = time.perf_counter() + 3
-    while viewer.sim.stats[6] < initial + count and time.perf_counter() < deadline:
+    while viewer.sim.stats[7] < initial + count and time.perf_counter() < deadline:
         pump(viewer, 0.02)
     assert viewer.sim.stats[6] >= initial + count, 'Native timer did not advance playback'
 
@@ -44,13 +44,13 @@ def main():
             wait_for_steps(viewer, 3)
             key(viewer, 'space', ' ')
             assert not viewer.running, 'Space should pause'
-            paused_at = simulation.stats[6]
+            paused_at = simulation.stats[7]
             pump(viewer, 0.2)
-            assert simulation.stats[6] == paused_at, 'Pause should stop automatic steps'
+            assert simulation.stats[7] == paused_at, 'Pause should stop automatic steps'
             key(viewer, 'n', 'n')
-            assert simulation.stats[6] == paused_at + 1, 'N should advance exactly once'
+            assert simulation.stats[7] == paused_at + 1, 'N should advance exactly once'
             pump(viewer, 0.1)
-            assert simulation.stats[6] == paused_at + 1, 'N should leave playback paused'
+            assert simulation.stats[7] == paused_at + 1, 'N should leave playback paused'
             key(viewer, 'space', ' ')
             assert viewer.running, 'Space should resume'
             wait_for_steps(viewer, 3)

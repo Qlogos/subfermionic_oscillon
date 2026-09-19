@@ -1,56 +1,54 @@
 #include "simulation.hpp"
+
+#include <cmath>
+#include <cstdint>
 #include <iostream>
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
-void check_mass(const Simulation& s) {
-    double stats[8]; s.statistics(stats);
-    require(std::abs(stats[1] - 500) < 1e-8 && std::abs(stats[2] - 500) < 1e-8,
-            "Each substance must remain conserved");
-    for (std::size_t i = 0; i < s.count; ++i)
-        require(std::isfinite(s.positive[i]) && std::isfinite(s.negative[i]) &&
-                s.positive[i] >= 0 && s.negative[i] >= 0, "Nonnegative finite state");
+
+void check_finite(const Simulation& simulation) {
+    for (std::size_t i = 0; i < simulation.count; ++i)
+        require(std::isfinite(simulation.u[i]) && std::isfinite(simulation.v[i]) &&
+                std::isfinite(simulation.du[i]) && std::isfinite(simulation.dv[i]),
+                "Field state must remain finite");
 }
+
 int main() {
     try {
-        Simulation s(10, 42, 1000);
-        check_mass(s);
-        require(reinterpret_cast<std::uintptr_t>(s.positive) % 64 == 0, "Aligned positive array");
-        require(reinterpret_cast<std::uintptr_t>(s.negative) % 64 == 0, "Aligned negative array");
-        for (std::size_t i = 0; i < s.count; ++i)
-            require(s.positive[i] == 0 || s.negative[i] == 0, "Initially one sign per cube");
-        for (int i = 0; i < 1000; ++i) s.step();
-        check_mass(s);
-        s.params = {10, 1, 10, 0.05, 0.1};
-        bool limited = false;
-        for (int i = 0; i < 200; ++i) { s.step(); limited |= s.limited > 0; }
-        require(limited, "Stress test must exercise the donor limiter");
-        check_mass(s);
+        Simulation simulation(12, 42, 1000);
+        require(reinterpret_cast<std::uintptr_t>(simulation.u) % 64 == 0, "u is aligned");
+        require(reinterpret_cast<std::uintptr_t>(simulation.v) % 64 == 0, "v is aligned");
+        require(simulation.mass_scale > 0, "Density scale is positive");
 
-        Simulation uniform(4, 42, 1000);
-        std::fill_n(uniform.positive, uniform.count, 0.5);
-        std::fill_n(uniform.negative, uniform.count, 0.5);
-        for (int i = 0; i < 20; ++i) uniform.step();
-        for (std::size_t i = 0; i < uniform.count; ++i)
-            require(uniform.positive[i] == 0.5 && uniform.negative[i] == 0.5, "Uniform equilibrium at walls");
+        double initial[8];
+        simulation.statistics(initial);
+        require(std::abs(initial[1] + initial[2] - 1000) < 1e-8, "Initial density is normalized");
+        require(std::abs(initial[6]) > 1e-4, "Quadrature seed carries internal angular momentum");
+        const double initial_energy = initial[5];
+        for (int i = 0; i < 1000; ++i) simulation.step();
+        double after[8];
+        simulation.statistics(after);
+        check_finite(simulation);
+        require(std::abs(after[0] - 20.0) < 1e-10, "Time advances by dt");
+        require(std::isfinite(after[5]) && after[5] > 0, "Energy remains finite and positive");
+        require(std::abs(after[5] - initial_energy) / initial_energy < 1e-2, "Undamped field energy is stable");
 
-        Simulation inertia(4, 42, 1000);
-        inertia.params.dt = 0.001;
-        const double initial = inertia.positive[0];
-        inertia.step();
-        const double after = inertia.positive[0];
-        inertia.params.rate = 0;
-        inertia.step();
-        const double ratio = (inertia.positive[0] - after) / (after - initial);
-        require(std::abs(ratio - std::exp(-0.001 / 0.4)) < 1e-8, "Flux memory decays exponentially after drive stops");
-        inertia.params.memory = 0;
-        const double before = inertia.positive[0];
-        inertia.step();
-        require(inertia.positive[0] == before, "Zero memory and zero drive stop transfer");
-        inertia.reset(42);
-        check_mass(inertia);
-        require(inertia.steps == 0 && inertia.time == 0, "Reset clears the clock");
-        std::cout << "PASS: conservation, positivity, limiter, alignment, closed-wall equilibrium, memory decay, reset\n";
-    } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }
+        Simulation repeat_a(12, 42, 1000);
+        Simulation repeat_b(12, 42, 1000);
+        for (int i = 0; i < 50; ++i) { repeat_a.step(); repeat_b.step(); }
+        for (std::size_t i = 0; i < repeat_a.count; ++i)
+            require(repeat_a.u[i] == repeat_b.u[i] && repeat_a.v[i] == repeat_b.v[i], "Seed is deterministic");
+
+        simulation.reset(42);
+        double reset_stats[8];
+        simulation.statistics(reset_stats);
+        require(simulation.steps == 0 && simulation.time == 0, "Reset clears time");
+        require(std::abs(reset_stats[1] + reset_stats[2] - 1000) < 1e-8, "Reset preserves normalization");
+        std::cout << "PASS: real-field normalization, alignment, finite evolution, energy stability, angular seed, deterministic reset\n";
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
+        return 1;
+    }
 }
