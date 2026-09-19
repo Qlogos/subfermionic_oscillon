@@ -1,3 +1,10 @@
+# TOY PROJECT
+## This project is largely caffeine-fuelled agent-mediated idea exploration journeys. They don't necessarily showcase implementational skill, with the exception of optimization and high-level algorithmic understanding. They're mostly just... For fun.
+
+<img width="1024" height="644" alt="image" src="https://github.com/user-attachments/assets/a0a3cd7d-4139-4f25-9a18-1e9f791a9cb0" />
+<img width="1065" height="1083" alt="image" src="https://github.com/user-attachments/assets/65602a31-772a-4d55-b598-1d0fe11383c1" />
+<img width="1107" height="1057" alt="image" src="https://github.com/user-attachments/assets/86f20a75-bfe9-46b3-b106-9fdc205b0b17" />
+
 # Resonator
 
 This toy project now uses a cheap classical real-field oscillon model. C++ evolves
