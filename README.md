@@ -1,5 +1,9 @@
 # TOY PROJECT
 
+## That is to say, I'm just messing around with some late-night ideas I get with
+
+## a lot of caffeine, and _agentic assistance_
+
 # Resonator
 
 A toy, local simulation: C++ evolves two conserved substances on a 100 x 100 x 100
